@@ -1,0 +1,133 @@
+There’s a publishing house that already has a large collection of English → Azerbaijani translations done by its own editors.
+Now they want to train an AI model using their previous translations so that the model learns their unique translation style, tone, and terminology.
+
+After training, editors will be able to use a UI where they:
+
+See both the original text and the AI-translated text;
+
+If they don’t like a specific translated section, they can select that part and re-translate it using Gemini or ChatGPT;
+
+The new translation overrides the old one in the database.
+
+The main goal is to:
+
+Preserve the publisher’s translation style in all future translations.
+
+Measure and prove (through metrics) that the model’s outputs mostly come from their data — e.g., “70% of this translation style is ours.”
+
+Ensure that the linguistic concept and stylistic consistency remain intact.
+
+Speed (GPU) is not a priority — accuracy and quality are.
+
+⚙️ Technical Approach
+1. Model Type
+
+The most suitable models for this use case are translation-oriented Large Language Models (LLMs) that can be fine-tuned:
+
+MarianMT (Helsinki-NLP) – good for EN→AZ fine-tuning.
+
+M2M100 (Facebook) – supports multilingual translation, including Azerbaijani.
+
+NLLB-200 (Meta) – excellent for low-resource languages like Azerbaijani.
+
+Llama-3 fine-tuned with LoRA adapters – can be used to preserve custom translation tone and style.
+
+The recommended model for this case:
+
+🏆 NLLB-200 fine-tuned with LoRA adapters
+
+This model gives the best results in preserving linguistic nuance and supports metric-based evaluation easily.
+
+🧰 Data Preparation Process
+
+Collect parallel corpora:
+
+English → Azerbaijani pairs from previous book translations.
+
+Store them as key-value pairs:
+
+{ "source": "English sentence", "target": "Azerbaijani translation" }
+
+
+Cleaning and preprocessing:
+
+Remove HTML tags, footnotes, OCR noise.
+
+Normalize Azerbaijani characters (ə, ğ, ı, ö, ü, ç, ş).
+
+Sentence tokenization using SentencePiece or nltk.
+
+Splitting the dataset:
+
+80% training, 10% validation, 10% testing.
+
+Optional style tagging:
+
+Tag by genre (e.g., “literary”, “academic”, “children’s literature”).
+
+Helps model adapt to stylistic variations.
+
+📊 Metrics (Evaluation and Insight)
+
+To prove the model works correctly and preserves the style:
+
+A. Quality Metrics
+
+BLEU, ChrF, TER — Compare model translations with human ones.
+(Library: sacrebleu)
+
+B. Stylistic Similarity
+
+Use sentence embeddings (from sentence-transformers) to measure cosine similarity between AI and human translations.
+
+Analyze n-gram frequency, sentence length, word complexity, and terminology frequency.
+
+C. Data Attribution
+
+To show how much of the model’s translation comes from the publisher’s data:
+
+Use Influence Functions or Embedding similarity distribution to estimate that “70% of the style is derived from the publisher’s data.”
+
+D. Style Memory Check
+
+Periodically compare new translations with historical data to ensure the model’s stylistic drift is minimal.
+
+🔁 System Flow
+
+Data Preparation → Collect and clean translation pairs.
+
+Model Fine-tuning → Train NLLB-200 with LoRA adapters on prepared data.
+
+Evaluation → Run BLEU, ChrF, and stylistic metrics.
+
+UI Interaction:
+
+Editor uploads an English text.
+
+AI generates Azerbaijani translation.
+
+The editor can view, compare, and modify the translation.
+
+If unsatisfied, the editor selects text and re-translates via Gemini or ChatGPT.
+
+The overridden text is stored in the DB and logged for retraining.
+
+Retraining (Continuous Learning)
+
+A nightly cron job retrains the model with newly corrected translations.
+
+Style embeddings are updated so the model keeps learning the publisher’s evolving tone.
+
+Monitoring & Logging
+
+Track BLEU/ChrF over time to detect performance drift.
+
+Maintain a dashboard (e.g., Metabase or Grafana).
+
+🧩 Outcome
+
+The model produces translations that sound like the publisher’s editors.
+
+Quantitative metrics prove that 70%+ of the stylistic fingerprint originates from the publisher’s own translation dataset.
+
+The system continues to learn and refine its tone as editors make corrections.
