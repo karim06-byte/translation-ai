@@ -25,9 +25,9 @@ wheels/
 
 # Models and Data
 node_modules/
-outputs/
-data/raw/
-data/processed/
+# outputs/
+# data/raw/
+# data/processed/
 *.ckpt
 *.pth
 *.bin
@@ -48,7 +48,7 @@ data/processed/
 
 # Logs
 *.log
-logs/
+# logs/
 
 # Database
 *.db
@@ -66,3 +66,13 @@ Thumbs.db
 .coverage
 htmlcov/
 
+
+
+models/
+outputs/
+*.bin
+*.safetensors
+*.pt
+*.lock
+*.jsonl
+*.model
