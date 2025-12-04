@@ -24,7 +24,7 @@ wheels/
 *.egg
 
 # Models and Data
-models/
+node_modules/
 outputs/
 data/raw/
 data/processed/
@@ -43,6 +43,8 @@ data/processed/
 *.swp
 *.swo
 *~
+
+.venv/
 
 # Logs
 *.log
