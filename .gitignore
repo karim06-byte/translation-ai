@@ -68,8 +68,9 @@ htmlcov/
 
 
 
-models/
+# models/
 # outputs/
+models/models--facebook--nllb-200-distilled-1.3B/blobs/
 *.bin
 *.safetensors
 *.pt
