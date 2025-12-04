@@ -78,10 +78,29 @@ class TranslationService:
             logger.error(f"Error loading model: {e}")
             raise
     
-    def translate(self, text: str, max_length: int = 256) -> str:
-        """Translate English text to Azerbaijani."""
+    def translate(self, text: str, max_length: int = 256, use_style_memory: bool = True) -> str:
+        """Translate English text to Azerbaijani with optional style memory integration."""
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not loaded")
+        
+        # Check style memory first if enabled
+        if use_style_memory:
+            try:
+                from backend.services.style_memory import get_style_memory_service
+                style_memory_service = get_style_memory_service()
+                
+                # Find nearest style memory entry
+                nearest = style_memory_service.find_nearest(text, k=1, threshold=0.85)
+                if nearest:
+                    entry, similarity = nearest[0]
+                    # If similarity is very high, use style memory translation directly
+                    if similarity >= 0.95:
+                        logger.info(f"Using style memory translation (similarity: {similarity:.3f})")
+                        return entry["preferred_az"]
+                    # If similarity is high but not perfect, we can still use it as a hint
+                    # For now, we'll use the model translation but could enhance this later
+            except Exception as e:
+                logger.warning(f"Error checking style memory: {e}, falling back to model translation")
         
         try:
             # Set source and target languages for NLLB tokenizer

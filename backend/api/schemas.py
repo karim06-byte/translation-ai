@@ -49,6 +49,7 @@ class SegmentMetrics(BaseModel):
     style_similarity: Optional[float] = None
     has_override: bool = False
     override_similarity: Optional[float] = None
+    override_percentage: Optional[float] = None  # Percentage of translation changed by override (0-100)
     from_style_memory: bool = False
     translation_source: Optional[str] = None
     
@@ -68,6 +69,7 @@ class SegmentResponse(BaseModel):
     from_style_memory: bool = False
     has_override: bool = False
     override_similarity_score: Optional[float] = None
+    override_percentage: Optional[float] = None  # Percentage of translation changed by override (0-100)
     translation_source: Optional[str] = None
     created_at: datetime
     

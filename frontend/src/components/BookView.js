@@ -57,7 +57,9 @@ function BookView() {
 
   const fetchSegments = async () => {
     try {
+      setLoading(true);
       const response = await axios.get(`/api/segments/book/${bookId}?page=1&page_size=100&include_metrics=true`);
+      console.log('Fetched segments:', response.data.segments.length);
       setSegments(response.data.segments);
     } catch (error) {
       console.error('Error fetching segments:', error);
@@ -130,27 +132,27 @@ function BookView() {
     if (!selectedSegment || !newTranslation) return;
 
     try {
-      await axios.post(`/api/segments/${selectedSegment.id}/override`, {
+      const response = await axios.post(`/api/segments/${selectedSegment.id}/override`, {
         segment_id: selectedSegment.id,
         new_translation: newTranslation,
         engine: engine,
       });
 
-      // Update segment
-      setSegments((prev) =>
-        prev.map((s) =>
-          s.id === selectedSegment.id
-            ? { ...s, translated_az: newTranslation, status: 'overridden' }
-            : s
-        )
-      );
+      console.log('Override response:', response.data);
 
+      // Close dialog first
       setOverrideDialogOpen(false);
       setSelectedSegment(null);
       setNewTranslation('');
+      
+      // Force refresh segments from server to get all updated data
+      setLoading(true);
+      await fetchSegments();
+      
+      alert('Override saved successfully! The translation has been updated.');
     } catch (error) {
       console.error('Error overriding:', error);
-      alert('Error saving override');
+      alert('Error saving override: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -215,67 +217,145 @@ function BookView() {
                       Translation Metrics
                     </Typography>
                     <Grid container spacing={1}>
-                      {/* Translation Source Breakdown */}
+                      {/* Translation Source Breakdown - Must sum to 100% */}
                       <Grid item xs={12}>
                         <Box sx={{ mb: 1 }}>
                           <Typography variant="caption" color="text.secondary" display="block">
-                            Translation Source:
+                            Translation Source Breakdown:
                           </Typography>
-                          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
-                            {segment.from_style_memory ? (
-                              <>
-                                <Box sx={{ flex: 1, bgcolor: 'success.light', p: 0.5, borderRadius: 0.5, textAlign: 'center' }}>
+                          {(() => {
+                            // Calculate percentages that sum to 100%
+                            // Override + Style Memory + Model = 100%
+                            
+                            // Get override percentage (how much was changed by override)
+                            const overridePct = segment.override_percentage || (segment.has_override ? 100 : 0);
+                            
+                            // Remaining percentage (what wasn't changed by override)
+                            const remainingPct = 100 - overridePct;
+                            
+                            // Split remaining between Style Memory and Model based on original source
+                            let styleMemoryPct = 0;
+                            let modelPct = 0;
+                            
+                            if (remainingPct > 0) {
+                              // For override segments, we need to determine the original source
+                              // The style_similarity_score represents how similar the ORIGINAL translation was to style memory
+                              if (segment.has_override) {
+                                // Override segments: use style_similarity_score to split remaining percentage
+                                // This score represents the ORIGINAL translation's similarity to style memory
+                                if (segment.style_similarity_score !== null && segment.style_similarity_score !== undefined && segment.style_similarity_score > 0) {
+                                  // Use the original style similarity score to split remaining percentage
+                                  styleMemoryPct = remainingPct * segment.style_similarity_score;
+                                  modelPct = remainingPct * (1 - segment.style_similarity_score);
+                                } else if (segment.from_style_memory) {
+                                  // If from_style_memory is true but no score, assume 100% style memory
+                                  styleMemoryPct = remainingPct;
+                                  modelPct = 0;
+                                } else {
+                                  // Original was pure model (no style memory)
+                                  modelPct = remainingPct;
+                                  styleMemoryPct = 0;
+                                }
+                              } else if (segment.from_style_memory) {
+                                // Not overridden, from style memory
+                                const styleScore = segment.style_similarity_score !== null && segment.style_similarity_score !== undefined 
+                                  ? segment.style_similarity_score 
+                                  : 1.0;
+                                styleMemoryPct = remainingPct * styleScore;
+                                modelPct = remainingPct * (1 - styleScore);
+                              } else {
+                                // Not overridden, from model
+                                if (segment.style_similarity_score !== null && segment.style_similarity_score !== undefined && segment.style_similarity_score > 0) {
+                                  styleMemoryPct = remainingPct * segment.style_similarity_score;
+                                  modelPct = remainingPct * (1 - segment.style_similarity_score);
+                                } else {
+                                  modelPct = remainingPct;
+                                  styleMemoryPct = 0;
+                                }
+                              }
+                            }
+                            
+                            // Ensure they sum to exactly 100% (handle rounding)
+                            const total = overridePct + styleMemoryPct + modelPct;
+                            if (Math.abs(total - 100) > 0.1) {
+                              // Adjust model percentage to make it exactly 100%
+                              modelPct = 100 - overridePct - styleMemoryPct;
+                            }
+                            
+                            // Always show all three, even if 0%
+                            return (
+                              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 0.5 }}>
+                                <Box sx={{ 
+                                  flex: Math.max(overridePct / 100, 0.1), 
+                                  bgcolor: 'warning.light', 
+                                  p: 0.5, 
+                                  borderRadius: 0.5, 
+                                  textAlign: 'center',
+                                  minWidth: '80px'
+                                }}>
+                                  <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'warning.dark' }}>
+                                    Override: {overridePct.toFixed(1)}%
+                                  </Typography>
+                                </Box>
+                                <Box sx={{ 
+                                  flex: Math.max(styleMemoryPct / 100, 0.1), 
+                                  bgcolor: 'success.light', 
+                                  p: 0.5, 
+                                  borderRadius: 0.5, 
+                                  textAlign: 'center',
+                                  minWidth: '80px'
+                                }}>
                                   <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'success.dark' }}>
-                                    Style Memory: 100%
+                                    Style: {styleMemoryPct.toFixed(1)}%
                                   </Typography>
                                 </Box>
-                                <Box sx={{ flex: 0, bgcolor: 'primary.light', p: 0.5, borderRadius: 0.5, textAlign: 'center', minWidth: '80px' }}>
+                                <Box sx={{ 
+                                  flex: Math.max(modelPct / 100, 0.1), 
+                                  bgcolor: 'primary.light', 
+                                  p: 0.5, 
+                                  borderRadius: 0.5, 
+                                  textAlign: 'center',
+                                  minWidth: '80px'
+                                }}>
                                   <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'primary.dark' }}>
-                                    Model: 0%
+                                    Model: {modelPct.toFixed(1)}%
                                   </Typography>
                                 </Box>
-                              </>
-                            ) : (
-                              <>
-                                <Box sx={{ flex: 0, bgcolor: 'success.light', p: 0.5, borderRadius: 0.5, textAlign: 'center', minWidth: '80px' }}>
-                                  <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'success.dark' }}>
-                                    Style: 0%
-                                  </Typography>
-                                </Box>
-                                <Box sx={{ flex: 1, bgcolor: 'primary.light', p: 0.5, borderRadius: 0.5, textAlign: 'center' }}>
-                                  <Typography variant="caption" sx={{ fontWeight: 'bold', color: 'primary.dark' }}>
-                                    AI Model: 100%
-                                  </Typography>
-                                </Box>
-                              </>
-                            )}
-                          </Box>
+                              </Box>
+                            );
+                          })()}
                         </Box>
                       </Grid>
                       
-                      {segment.style_similarity_score !== null && segment.style_similarity_score !== undefined && (
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary">
-                            Style Similarity:
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                            {(segment.style_similarity_score * 100).toFixed(1)}%
-                          </Typography>
+                      {/* Detailed Metrics */}
+                      <Grid item xs={12}>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>
+                          Detailed Metrics:
+                        </Typography>
+                        <Grid container spacing={1}>
+                          {segment.style_similarity_score !== null && segment.style_similarity_score !== undefined && (
+                            <Grid item xs={4}>
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                Style Similarity:
+                              </Typography>
+                              <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                {(segment.style_similarity_score * 100).toFixed(1)}%
+                              </Typography>
+                            </Grid>
+                          )}
+                          
+                          {segment.has_override && segment.override_similarity_score !== null && segment.override_similarity_score !== undefined && (
+                            <Grid item xs={4}>
+                              <Typography variant="caption" color="text.secondary" display="block">
+                                Override Similarity:
+                              </Typography>
+                              <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                                {(segment.override_similarity_score * 100).toFixed(1)}%
+                              </Typography>
+                            </Grid>
+                          )}
                         </Grid>
-                      )}
-                      
-                      {segment.has_override && (
-                        <Grid item xs={6}>
-                          <Typography variant="caption" color="text.secondary">
-                            Override Similarity:
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                            {segment.override_similarity_score !== null && segment.override_similarity_score !== undefined
-                              ? (segment.override_similarity_score * 100).toFixed(1) + '%'
-                              : 'N/A'}
-                          </Typography>
-                        </Grid>
-                      )}
+                      </Grid>
                     </Grid>
                   </Box>
                 )}

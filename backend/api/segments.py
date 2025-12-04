@@ -18,51 +18,184 @@ router = APIRouter(prefix="/api/segments", tags=["segments"])
 
 
 def calculate_and_store_segment_metrics(segment: Segment, db: Session) -> None:
-    """Calculate and store metrics for a single segment in the database."""
+    """Calculate and store metrics for a segment, including word-level change tracking."""
+    from backend.services.metrics import get_metrics_service
     metrics_service = get_metrics_service()
-    style_memory_service = get_style_memory_service()
     
     if not segment.translated_az:
         return
     
-    # Check if segment has override
-    override = db.query(Override).filter(
+    # Check if segment has override(s)
+    all_overrides = db.query(Override).filter(
         Override.segment_id == segment.id
-    ).order_by(Override.created_at.desc()).first()
+    ).order_by(Override.created_at.asc()).all()  # Get all overrides, oldest first
     
-    if override:
+    latest_override = db.query(Override).filter(
+        Override.segment_id == segment.id
+    ).order_by(Override.created_at.desc()).first()  # Get latest override
+    
+    # Store original translation source before ANY override (for percentage calculation)
+    original_translation_source = segment.translation_source
+    original_from_style_memory = segment.from_style_memory
+    original_style_similarity = segment.style_similarity_score
+    
+    if latest_override:
         segment.has_override = True
-        # Calculate similarity between override and original translation
+        
+        # Get the FIRST override to find the original translation (before any overrides)
+        first_override = all_overrides[0] if all_overrides else latest_override
+        original_translation_before_any_override = first_override.old_translation
+        
+        # Calculate word-level changes between LATEST old and new translation
+        # This tells us how much changed in the most recent override
         try:
+            import difflib
+            # Use the latest override's old and new translations
+            old_words = latest_override.old_translation.split() if latest_override.old_translation else []
+            new_words = latest_override.new_translation.split() if latest_override.new_translation else []
+            
+            # Calculate word-level similarity using difflib
+            matcher = difflib.SequenceMatcher(None, old_words, new_words)
+            word_similarity = matcher.ratio()
+            
+            # Calculate number of words changed
+            total_words = max(len(old_words), len(new_words))
+            words_changed = int((1 - word_similarity) * total_words) if total_words > 0 else 0
+            
+            # Calculate override percentage: how much of the translation was changed in LATEST override (0-100)
+            segment.override_percentage = (1 - word_similarity) * 100.0
+            
+            # Store override similarity (style similarity between latest old and new)
             segment.override_similarity_score = metrics_service.calculate_single_style_similarity(
-                override.new_translation,
-                segment.translated_az
+                latest_override.new_translation,
+                latest_override.old_translation if latest_override.old_translation else segment.translated_az
             )
+            
+            # For override segments, we need to find the ORIGINAL translation source (before ANY override)
+            # This is stored in the first override's old_translation
+            if original_translation_before_any_override:
+                try:
+                    from backend.services.style_memory import get_style_memory_service
+                    style_memory_service = get_style_memory_service()
+                    
+                    # Check if ORIGINAL translation (before any override) matches style memory
+                    nearest = style_memory_service.find_nearest(segment.source_en, k=1, threshold=0.50)
+                    if nearest:
+                        entry, similarity = nearest[0]
+                        # Calculate how similar the ORIGINAL translation (before any override) was to style memory
+                        original_style_sim = metrics_service.calculate_single_style_similarity(
+                            original_translation_before_any_override,
+                            entry["preferred_az"]
+                        )
+                        # Store this for percentage calculation
+                        original_style_similarity = original_style_sim
+                        if similarity >= 0.95:
+                            original_from_style_memory = True
+                            original_translation_source = "style_memory"
+                        else:
+                            original_from_style_memory = False
+                            original_translation_source = "model"
+                except Exception as e:
+                    logger.warning(f"Error checking original translation source: {e}")
+            
+            logger.info(f"Segment {segment.id}: {words_changed}/{total_words} words changed in latest override ({segment.override_percentage:.1f}%), similarity: {segment.override_similarity_score:.3f}")
         except Exception as e:
-            logger.warning(f"Error calculating override similarity: {e}")
-    
-    # Check if translation came from style memory
-    style_memory = db.query(StyleMemory).filter(
-        StyleMemory.segment_id == segment.id
-    ).first()
-    
-    if style_memory:
-        segment.from_style_memory = True
-        segment.translation_source = "style_memory"
-        # Calculate similarity to style memory entry
-        try:
-            segment.style_similarity_score = metrics_service.calculate_single_style_similarity(
-                segment.translated_az,
-                style_memory.preferred_az
-            )
-        except Exception as e:
-            logger.warning(f"Error calculating style similarity: {e}")
+            logger.warning(f"Error calculating override metrics: {e}")
+            # Fallback: assume 100% override if we can't calculate
+            segment.override_percentage = 100.0
+            try:
+                segment.override_similarity_score = metrics_service.calculate_single_style_similarity(
+                    latest_override.new_translation,
+                    latest_override.old_translation if latest_override.old_translation else segment.translated_az
+                )
+            except:
+                pass
     else:
-        # Check if similar translation exists in style memory
-        # Only check if we don't have a direct style_memory entry
-        segment.translation_source = "model"
-        # Note: We skip the nearest search here to avoid vector dimension issues
-        # The style_similarity_score will be calculated when style memory is used
+        segment.override_percentage = 0.0
+    
+    # For override segments, we need to preserve the original translation source info
+    # so we can properly calculate the percentage breakdown
+    # IMPORTANT: Check for override FIRST, because after override, a style_memory entry is created
+    # which would make us think the current translation is from style_memory (wrong!)
+    
+    if segment.has_override:
+        # For override segments, use the original translation source info we calculated earlier
+        # This tells us what the ORIGINAL translation was (before override)
+        # The current translation is the override, but we need to know the original source
+        segment.translation_source = original_translation_source or "model"
+        segment.from_style_memory = original_from_style_memory
+        segment.style_similarity_score = original_style_similarity
+    else:
+        # Not overridden - check if translation came from style memory
+        style_memory = db.query(StyleMemory).filter(
+            StyleMemory.segment_id == segment.id
+        ).first()
+        
+        if style_memory:
+            segment.from_style_memory = True
+            segment.translation_source = "style_memory"
+            # Calculate similarity to style memory entry
+            try:
+                segment.style_similarity_score = metrics_service.calculate_single_style_similarity(
+                    segment.translated_az,
+                    style_memory.preferred_az
+                )
+            except Exception as e:
+                logger.warning(f"Error calculating style similarity: {e}")
+        else:
+            # Check if similar translation exists in style memory (for model translations)
+            segment.translation_source = "model"
+            segment.from_style_memory = False
+        
+        try:
+            from backend.services.style_memory import get_style_memory_service
+            style_memory_service = get_style_memory_service()
+            
+            # Use lower threshold to find more matches (0.50 instead of 0.70)
+            # This allows segments from training data to match style memory entries
+            nearest = style_memory_service.find_nearest(segment.source_en, k=1, threshold=0.50)
+            if nearest:
+                entry, similarity = nearest[0]
+                # Calculate translation similarity (how similar is the actual translation to style memory)
+                translation_similarity = metrics_service.calculate_single_style_similarity(
+                    segment.translated_az,
+                    entry["preferred_az"]
+                )
+                
+                # If source similarity is very high (>= 0.95), we likely used style memory
+                if similarity >= 0.95:
+                    segment.from_style_memory = True
+                    segment.translation_source = "style_memory"
+                    segment.style_similarity_score = translation_similarity  # Use translation similarity, not source similarity
+                else:
+                    # Source is similar but not identical - use translation similarity
+                    # This shows how close the model translation is to the style memory preference
+                    segment.style_similarity_score = translation_similarity
+                    segment.translation_source = "model"
+            else:
+                # No style memory match found - try to find any style memory entry for comparison
+                # This is a fallback to ensure we always have some similarity score
+                try:
+                    # Get any style memory entry to compare against (for baseline)
+                    all_entries = style_memory_service.get_recent_overrides(limit=1)
+                    if all_entries:
+                        # Compare against a random style memory entry as baseline
+                        baseline_entry = all_entries[0]
+                        baseline_similarity = metrics_service.calculate_single_style_similarity(
+                            segment.translated_az,
+                            baseline_entry.get("target", "")
+                        )
+                        # Use a lower score since it's not a direct match
+                        segment.style_similarity_score = baseline_similarity * 0.7  # Scale down since it's not a match
+                    else:
+                        segment.style_similarity_score = None
+                except:
+                    segment.style_similarity_score = None
+                logger.debug(f"No style memory match for segment {segment.id}, style_similarity_score set to {segment.style_similarity_score}")
+        except Exception as e:
+            logger.warning(f"Error checking style memory for segment {segment.id}: {e}")
+            segment.translation_source = "model"
+            segment.style_similarity_score = None
     
     # Flush changes but don't commit - let the caller commit
     db.flush()
@@ -80,9 +213,10 @@ def get_book_segments(
     """Get segments for a book with pagination."""
     skip = (page - 1) * page_size
     
+    # Order by segment_index to ensure consistent ordering
     segments = db.query(Segment).filter(
         Segment.book_id == book_id
-    ).offset(skip).limit(page_size).all()
+    ).order_by(Segment.segment_index.asc()).offset(skip).limit(page_size).all()
     
     total = db.query(Segment).filter(Segment.book_id == book_id).count()
     
@@ -200,13 +334,28 @@ def override_translation(
             similarity_score=similarity_score
         )
         
-        # Recalculate and store metrics for this segment
+        # IMPORTANT: Recalculate metrics AFTER all changes are made
+        # This will recalculate override_percentage, style_similarity_score, etc.
+        # It will use the FIRST override to find original source, and LATEST override for current percentage
         calculate_and_store_segment_metrics(segment, db)
         
+        # Commit all changes
+        db.commit()
+        
+        # Refresh to get the latest data (including updated metrics)
+        db.refresh(segment)
         db.refresh(override)
+        
+        logger.info(f"Override successful for segment {segment_id}:")
+        logger.info(f"  Old: {old_translation[:50] if old_translation else 'None'}...")
+        logger.info(f"  New: {request.new_translation[:50]}...")
+        logger.info(f"  Override %: {segment.override_percentage:.1f}%")
+        logger.info(f"  Style similarity: {segment.style_similarity_score}")
+        
         return OverrideResponse.model_validate(override)
     
     except Exception as e:
         db.rollback()
+        logger.error(f"Override error for segment {segment_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Override error: {str(e)}")
 

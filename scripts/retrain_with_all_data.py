@@ -52,7 +52,7 @@ def prepare_combined_training_data():
             ).order_by(Override.created_at.desc()).first()
             
             if override:
-                # Use override as preferred translation
+                # Use override as preferred translation (highest priority)
                 training_data.append({
                     "source": segment.source_en,
                     "target": override.new_translation
@@ -66,14 +66,45 @@ def prepare_combined_training_data():
                 })
                 segment_count += 1
         
+        # 3. Get style memory entries (approved translations)
+        print("Loading style memory entries...")
+        from backend.services.style_memory import get_style_memory_service
+        style_memory_service = get_style_memory_service()
+        
+        style_memory_count = 0
+        try:
+            # Get recent style memory entries (these are editor-approved)
+            style_memories = style_memory_service.get_recent_overrides(limit=1000)
+            for entry in style_memories:
+                # Check if we already have this in training data (from overrides)
+                # to avoid duplicates
+                source = entry.get("source", "")
+                target = entry.get("target", "")
+                if source and target:
+                    # Check for duplicates
+                    is_duplicate = any(
+                        item.get("source", "").strip().lower() == source.strip().lower()
+                        for item in training_data
+                    )
+                    if not is_duplicate:
+                        training_data.append({
+                            "source": source,
+                            "target": target
+                        })
+                        style_memory_count += 1
+            print(f"  Loaded {style_memory_count} additional examples from style memory")
+        except Exception as e:
+            print(f"  Warning: Could not load style memory entries: {e}")
+        
         print(f"  Loaded {segment_count} examples from database segments")
+        print(f"  Loaded {style_memory_count} examples from style memory")
         print(f"  Total training examples: {len(training_data)}")
         
         if len(training_data) == 0:
             print("ERROR: No training data available!")
             return None, None, None
         
-        # 3. Shuffle and split into train/val (80/20)
+        # 4. Shuffle and split into train/val (80/20)
         import random
         random.shuffle(training_data)
         
@@ -81,7 +112,7 @@ def prepare_combined_training_data():
         val_data = training_data[:val_size]
         train_data = training_data[val_size:]
         
-        # 4. Save to files
+        # 5. Save to files
         output_dir = Path("data/processed")
         output_dir.mkdir(parents=True, exist_ok=True)
         

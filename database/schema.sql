@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS segments (
     from_style_memory BOOLEAN DEFAULT FALSE,
     has_override BOOLEAN DEFAULT FALSE,
     override_similarity_score FLOAT,
+    override_percentage FLOAT, -- Percentage of translation changed by override (0-100)
     translation_source VARCHAR(50) DEFAULT 'model', -- 'model' or 'style_memory'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -57,7 +58,7 @@ CREATE TABLE IF NOT EXISTS style_memory (
     segment_id INTEGER REFERENCES segments(id) ON DELETE SET NULL,
     source_en TEXT NOT NULL,
     preferred_az TEXT NOT NULL,
-    embedding vector(768), -- Sentence transformer embedding dimension
+    embedding vector(384), -- Sentence transformer embedding dimension (paraphrase-multilingual-MiniLM-L12-v2)
     approved_by INTEGER REFERENCES users(id),
     approved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     engine VARCHAR(50), -- 'gemini', 'chatgpt', 'manual'

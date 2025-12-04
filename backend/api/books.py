@@ -70,14 +70,15 @@ def translate_book_segments(book_id: int):
                 print(f"[TRANSLATION TASK] [{idx+1}/{len(segments)}] Translating segment {segment.id}...", file=sys.stderr, flush=True)
                 print(f"  Source: {segment.source_en[:80]}...", file=sys.stderr, flush=True)
                 
-                translated_az = translation_service.translate(segment.source_en)
+                # Translate with style memory integration
+                translated_az = translation_service.translate(segment.source_en, use_style_memory=True)
                 
                 segment.translated_az = translated_az
                 segment.status = "translated"
-                segment.translation_source = "model"
+                segment.translation_source = "model"  # Will be updated by calculate_and_store_segment_metrics
                 db.flush()
                 
-                # Calculate and store metrics
+                # Calculate and store metrics (this will check style memory and update translation_source)
                 try:
                     calculate_and_store_segment_metrics(segment, db)
                 except Exception as e:
@@ -172,9 +173,25 @@ def upload_book(
         
         # Clean and tokenize
         text = clean_text(text)
+        
+        # Improved sentence tokenization - ensure proper sentence splitting
         sentences = sentence_tokenize(text, language='en')
         
-        print(f"[UPLOAD] Tokenized into {len(sentences)} sentences", flush=True)
+        # Filter and validate sentences
+        valid_sentences = []
+        for sent in sentences:
+            sent = sent.strip()
+            # Only include sentences that are:
+            # - At least 10 characters (not just punctuation)
+            # - Not just whitespace
+            # - Have actual content (not just numbers/symbols)
+            if len(sent) >= 10 and sent and not sent.isspace():
+                # Check if it has at least one letter
+                if any(c.isalpha() for c in sent):
+                    valid_sentences.append(sent)
+        
+        sentences = valid_sentences
+        print(f"[UPLOAD] Tokenized into {len(sentences)} valid sentences", flush=True)
         
         # Create or get book
         if book_id:

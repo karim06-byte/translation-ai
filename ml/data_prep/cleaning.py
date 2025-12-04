@@ -32,7 +32,7 @@ def normalize_azerbaijani(text: str) -> str:
 
 
 def sentence_tokenize(text: str, language: str = 'en') -> List[str]:
-    """Tokenize text into sentences."""
+    """Tokenize text into sentences with improved splitting."""
     import nltk
     import ssl
     
@@ -60,15 +60,35 @@ def sentence_tokenize(text: str, language: str = 'en') -> List[str]:
     from nltk.tokenize import sent_tokenize
     
     try:
+        # Use NLTK sentence tokenizer
         sentences = sent_tokenize(text, language=language)
     except:
-        # Fallback: simple sentence splitting
+        # Fallback: improved regex-based sentence splitting
         import re
-        sentences = re.split(r'[.!?]+\s+', text)
+        # Split on sentence endings (. ! ?) followed by whitespace or newline
+        # Handle abbreviations and decimal numbers
+        pattern = r'(?<=[.!?])\s+(?=[A-Z])'
+        sentences = re.split(pattern, text)
     
-    # Filter out very short sentences (likely noise)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
-    return sentences
+    # Clean and filter sentences
+    cleaned_sentences = []
+    for sent in sentences:
+        sent = sent.strip()
+        # Remove extra whitespace
+        sent = re.sub(r'\s+', ' ', sent)
+        
+        # Only include sentences that are:
+        # - At least 10 characters
+        # - Not just whitespace/punctuation
+        # - Have at least one letter
+        if len(sent) >= 10 and not sent.isspace():
+            if any(c.isalpha() for c in sent):
+                # Remove leading/trailing punctuation-only parts
+                sent = sent.strip('.,;:!?')
+                if len(sent) >= 10:
+                    cleaned_sentences.append(sent)
+    
+    return cleaned_sentences
 
 
 def filter_pair(source: str, target: str, min_length: int = 10, max_length: int = 512) -> bool:

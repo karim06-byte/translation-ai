@@ -4,12 +4,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import date, datetime
 from typing import Optional
+import logging
 
 from backend.models.database import get_db, Metric, Segment, Override, User
 from backend.api.schemas import MetricsResponse
 from backend.api.auth import get_current_user
 from backend.services.metrics import get_metrics_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
@@ -82,25 +84,50 @@ def calculate_current_metrics(db: Session) -> MetricsResponse:
             attribution_ratio=0.0
         )
     
-    # Get predictions (model translations)
-    predictions = [s.translated_az for s in segments if s.translated_az]
-    
-    # For BLEU/ChrF, we need reference translations
-    # If segments have overridden translations, use those as references
-    # Otherwise, we can't calculate accurate BLEU/ChrF
+    # For BLEU/ChrF, we need to compare ORIGINAL model translations vs REFERENCE translations
+    # Predictions = original model translations (before any overrides)
+    # References = preferred translations (overrides if they exist, otherwise current translation)
+    predictions = []
     references = []
-    for s in segments:
-        # Check if there's an override (preferred translation)
-        override = db.query(Override).filter(Override.segment_id == s.id).order_by(Override.created_at.desc()).first()
-        if override:
-            references.append(override.new_translation)
-        else:
-            # Use the translation itself as reference (not ideal, but better than nothing)
-            references.append(s.translated_az)
     
-    # Calculate metrics
-    bleu = metrics_service.calculate_bleu(predictions, references) if len(predictions) == len(references) else 0.0
-    chrf = metrics_service.calculate_chrf(predictions, references) if len(predictions) == len(references) else 0.0
+    for s in segments:
+        if not s.translated_az:
+            continue
+            
+        # Check if there's an override (preferred translation)
+        override = db.query(Override).filter(Override.segment_id == s.id).order_by(Override.created_at.asc()).first()  # Get FIRST override
+        
+        if override:
+            # Segment has been overridden
+            # Prediction = original model translation (stored in first override's old_translation)
+            # Reference = preferred translation (latest override's new_translation)
+            original_translation = override.old_translation if override.old_translation else s.translated_az
+            
+            # Get the latest override for the reference
+            latest_override = db.query(Override).filter(Override.segment_id == s.id).order_by(Override.created_at.desc()).first()
+            preferred_translation = latest_override.new_translation if latest_override else s.translated_az
+            
+            # Only add if they're different (otherwise BLEU/ChrF will be 100%)
+            if original_translation != preferred_translation:
+                predictions.append(original_translation)
+                references.append(preferred_translation)
+        else:
+            # No override - can't calculate meaningful BLEU/ChrF
+            # Skip this segment for BLEU/ChrF calculation
+            # (We don't have a "ground truth" reference to compare against)
+            pass
+    
+    # Calculate metrics only if we have valid prediction-reference pairs
+    bleu = 0.0
+    chrf = 0.0
+    if len(predictions) > 0 and len(predictions) == len(references):
+        bleu = metrics_service.calculate_bleu(predictions, references)
+        chrf = metrics_service.calculate_chrf(predictions, references)
+    elif len(segments) > 0:
+        # If we have segments but no overrides, we can't calculate meaningful BLEU/ChrF
+        # Return 0.0 to indicate no data available
+        bleu = 0.0
+        chrf = 0.0
     style_similarity = 0.0
     if len(predictions) == len(references):
         try:
