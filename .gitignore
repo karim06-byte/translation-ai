@@ -69,7 +69,7 @@ htmlcov/
 
 
 models/
-outputs/
+# outputs/
 *.bin
 *.safetensors
 *.pt
