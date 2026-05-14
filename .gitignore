@@ -77,3 +77,5 @@ models/models--facebook--nllb-200-distilled-1.3B/blobs/
 *.lock
 *.jsonl
 *.model
+node_modules/
+node_modules
