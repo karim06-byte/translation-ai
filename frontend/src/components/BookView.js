@@ -92,11 +92,14 @@ function BookView() {
     }
   };
 
+  const direction = book?.translation_direction || 'en_to_az';
+
   const handleTranslate = async (segmentId, sourceText) => {
     try {
       const response = await axios.post('/api/translate', {
         source_en: sourceText,
         segment_id: segmentId,
+        direction,
       });
       
       // Update segment in local state
@@ -196,7 +199,7 @@ function BookView() {
             <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  English (Source)
+                  {direction === 'az_to_en' ? 'Azerbaijani (Source)' : 'English (Source)'}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 2 }}>
                   {segment.source_en}
@@ -204,7 +207,7 @@ function BookView() {
               </Grid>
               <Grid item xs={12} md={6}>
                 <Typography variant="subtitle2" color="text.secondary">
-                  Azerbaijani (Translation)
+                  {direction === 'az_to_en' ? 'English (Translation)' : 'Azerbaijani (Translation)'}
                 </Typography>
                 <Typography variant="body1" sx={{ mb: 2 }}>
                   {segment.translated_az || 'Not translated'}
@@ -389,7 +392,7 @@ function BookView() {
         <DialogTitle>Override Translation</DialogTitle>
         <DialogContent>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
-            Source (English):
+            {direction === 'az_to_en' ? 'Source (Azerbaijani):' : 'Source (English):'}
           </Typography>
           <Typography variant="body2" sx={{ mb: 2, p: 1, bgcolor: 'grey.100' }}>
             {selectedSegment?.source_en}

@@ -28,6 +28,7 @@ class BookCreate(BaseModel):
     title_az: Optional[str] = None
     author: Optional[str] = None
     year: Optional[int] = None
+    translation_direction: str = "en_to_az"
 
 
 class BookResponse(BaseModel):
@@ -37,6 +38,7 @@ class BookResponse(BaseModel):
     author: Optional[str]
     year: Optional[int]
     status: str
+    translation_direction: Optional[str] = "en_to_az"
     created_at: datetime
     
     class Config:
@@ -88,6 +90,7 @@ class SegmentListResponse(BaseModel):
 class TranslationRequest(BaseModel):
     source_en: str
     segment_id: Optional[int] = None
+    direction: str = "en_to_az"  # 'en_to_az' or 'az_to_en'
 
 
 class TranslationResponse(BaseModel):

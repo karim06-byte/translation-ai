@@ -23,57 +23,67 @@ class ExternalAPIService:
         else:
             self.gemini_model = None
     
-    def translate_with_chatgpt(self, text: str, context: Optional[str] = None) -> str:
+    def translate_with_chatgpt(self, text: str, context: Optional[str] = None, direction: str = "en_to_az") -> str:
         """Translate using ChatGPT API."""
         if not settings.openai_api_key:
             raise ValueError("OpenAI API key not configured")
-        
-        try:
+
+        if direction == "az_to_en":
+            system_msg = "You are a professional translator specializing in Azerbaijani to English translation for publishing houses."
+            prompt = f"Translate the following Azerbaijani text to English. Maintain a professional publishing house style.\n\nText: {text}"
+        else:
+            system_msg = "You are a professional translator specializing in English to Azerbaijani translation for publishing houses."
             prompt = f"Translate the following English text to Azerbaijani. Maintain a professional publishing house style.\n\nText: {text}"
-            if context:
-                prompt += f"\n\nContext: {context}"
-            
+
+        if context:
+            prompt += f"\n\nContext: {context}"
+
+        try:
             response = openai.ChatCompletion.create(
                 model="gpt-4",
                 messages=[
-                    {"role": "system", "content": "You are a professional translator specializing in English to Azerbaijani translation for publishing houses."},
+                    {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
                 max_tokens=1000
             )
-            
+
             translation = response.choices[0].message.content.strip()
             return translation
-        
+
         except Exception as e:
             logger.error(f"Error with ChatGPT translation: {e}")
             raise
-    
-    def translate_with_gemini(self, text: str, context: Optional[str] = None) -> str:
+
+    def translate_with_gemini(self, text: str, context: Optional[str] = None, direction: str = "en_to_az") -> str:
         """Translate using Gemini API."""
         if not settings.gemini_api_key or not self.gemini_model:
             raise ValueError("Gemini API key not configured")
-        
-        try:
+
+        if direction == "az_to_en":
+            prompt = f"Translate the following Azerbaijani text to English. Maintain a professional publishing house style.\n\nText: {text}"
+        else:
             prompt = f"Translate the following English text to Azerbaijani. Maintain a professional publishing house style.\n\nText: {text}"
-            if context:
-                prompt += f"\n\nContext: {context}"
-            
+
+        if context:
+            prompt += f"\n\nContext: {context}"
+
+        try:
             response = self.gemini_model.generate_content(prompt)
             translation = response.text.strip()
             return translation
-        
+
         except Exception as e:
             logger.error(f"Error with Gemini translation: {e}")
             raise
-    
-    def retranslate(self, text: str, engine: str, context: Optional[str] = None) -> str:
+
+    def retranslate(self, text: str, engine: str, context: Optional[str] = None, direction: str = "en_to_az") -> str:
         """Retranslate text using specified engine."""
         if engine.lower() == "chatgpt" or engine.lower() == "gpt":
-            return self.translate_with_chatgpt(text, context)
+            return self.translate_with_chatgpt(text, context, direction=direction)
         elif engine.lower() == "gemini":
-            return self.translate_with_gemini(text, context)
+            return self.translate_with_gemini(text, context, direction=direction)
         else:
             raise ValueError(f"Unknown engine: {engine}")
 

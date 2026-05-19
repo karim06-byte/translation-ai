@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/books", tags=["books"])
 
 
-def translate_book_segments(book_id: int):
+def translate_book_segments(book_id: int, translation_direction: str = "en_to_az"):
     """Background task to translate all segments of a book."""
     import sys
     print(f"\n{'='*60}", file=sys.stderr, flush=True)
@@ -70,8 +70,12 @@ def translate_book_segments(book_id: int):
                 print(f"[TRANSLATION TASK] [{idx+1}/{len(segments)}] Translating segment {segment.id}...", file=sys.stderr, flush=True)
                 print(f"  Source: {segment.source_en[:80]}...", file=sys.stderr, flush=True)
                 
-                # Translate with style memory integration
-                translated_az = translation_service.translate(segment.source_en, use_style_memory=True)
+                # Translate with style memory integration (skip style memory for az_to_en)
+                translated_az = translation_service.translate(
+                    segment.source_en,
+                    use_style_memory=(translation_direction == "en_to_az"),
+                    direction=translation_direction,
+                )
                 
                 segment.translated_az = translated_az
                 segment.status = "translated"
@@ -144,6 +148,7 @@ def upload_book(
     file: UploadFile = File(...),
     book_id: int = None,
     auto_translate: bool = True,
+    translation_direction: str = "en_to_az",
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -173,9 +178,9 @@ def upload_book(
         
         # Clean and tokenize
         text = clean_text(text)
-        
-        # Improved sentence tokenization - ensure proper sentence splitting
-        sentences = sentence_tokenize(text, language='en')
+
+        # NLTK uses full language names; Azerbaijani isn't supported so always use English punkt
+        sentences = sentence_tokenize(text, language='english')
         
         # Filter and validate sentences
         valid_sentences = []
@@ -203,7 +208,8 @@ def upload_book(
                 title_en=file.filename,
                 file_path=str(file_path),
                 file_type=file.filename.split('.')[-1],
-                status="processing"
+                status="processing",
+                translation_direction=translation_direction,
             )
             db.add(book)
             db.commit()
@@ -230,9 +236,9 @@ def upload_book(
         
         # Start background translation task if enabled
         if auto_translate:
-            print(f"[UPLOAD] Starting background translation task...", flush=True)
+            print(f"[UPLOAD] Starting background translation task ({translation_direction})...", flush=True)
             logger.info(f"Starting translation for book {book.id}")
-            background_tasks.add_task(translate_book_segments, book.id)
+            background_tasks.add_task(translate_book_segments, book.id, translation_direction)
             print(f"[UPLOAD] ✓ Background task added for book {book.id}", flush=True)
             message += " Translation started in background. Check terminal for progress."
         else:
@@ -274,10 +280,12 @@ def translate_all_segments(
     
     from fastapi.responses import JSONResponse
     
+    direction = book.translation_direction or "en_to_az"
+
     if sync:
         # Run synchronously (for testing/debugging)
         print(f"[SYNC TRANSLATION] Starting synchronous translation for book {book_id}", flush=True)
-        translate_book_segments(book_id)
+        translate_book_segments(book_id, direction)
         return {
             "book_id": book_id,
             "status": "completed",
@@ -286,7 +294,7 @@ def translate_all_segments(
     else:
         # Start background translation
         print(f"[ASYNC TRANSLATION] Adding background task for book {book_id}", flush=True)
-        background_tasks.add_task(translate_book_segments, book_id)
+        background_tasks.add_task(translate_book_segments, book_id, direction)
         response_data = {
             "book_id": book_id,
             "status": "started",

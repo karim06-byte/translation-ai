@@ -40,10 +40,36 @@ class TranslationService:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self._load_model()
     
+    def _purge_broken_cache(self, cache_dir: str, model_name: str):
+        """Delete model cache if config.json is missing or not valid JSON."""
+        import json
+        import shutil
+        model_cache_name = "models--" + model_name.replace("/", "--")
+        model_cache_path = Path(cache_dir) / model_cache_name
+        if not model_cache_path.exists():
+            return
+        snapshots_dir = model_cache_path / "snapshots"
+        if not snapshots_dir.exists():
+            return
+        for snapshot_dir in snapshots_dir.iterdir():
+            if not snapshot_dir.is_dir():
+                continue
+            config_file = snapshot_dir / "config.json"
+            if not config_file.exists():
+                continue
+            try:
+                json.loads(config_file.read_text(encoding="utf-8"))
+                return  # cache is healthy
+            except Exception:
+                logger.warning(f"Broken model cache at {model_cache_path} — deleting so it can re-download")
+                shutil.rmtree(str(model_cache_path), ignore_errors=True)
+                return
+
     def _load_model(self):
         """Load model and tokenizer."""
         try:
             base_model_name = settings.model_name
+            self._purge_broken_cache(settings.model_cache_dir, base_model_name)
             logger.info(f"Loading base model: {base_model_name}")
             
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -78,17 +104,20 @@ class TranslationService:
             logger.error(f"Error loading model: {e}")
             raise
     
-    def translate(self, text: str, max_length: int = 256, use_style_memory: bool = True) -> str:
-        """Translate English text to Azerbaijani with optional style memory integration."""
+    def translate(self, text: str, max_length: int = 256, use_style_memory: bool = True, direction: str = "en_to_az") -> str:
+        """Translate text between English and Azerbaijani."""
         if not self.model or not self.tokenizer:
             raise RuntimeError("Model not loaded")
-        
-        # Check style memory first if enabled
-        if use_style_memory:
+
+        src_lang = "eng_Latn" if direction == "en_to_az" else "azj_Latn"
+        tgt_lang = "azj_Latn" if direction == "en_to_az" else "eng_Latn"
+
+        # Check style memory first if enabled (only for en_to_az, memory is indexed on EN)
+        if use_style_memory and direction == "en_to_az":
             try:
                 from backend.services.style_memory import get_style_memory_service
                 style_memory_service = get_style_memory_service()
-                
+
                 # Find nearest style memory entry
                 nearest = style_memory_service.find_nearest(text, k=1, threshold=0.85)
                 if nearest:
@@ -101,12 +130,11 @@ class TranslationService:
                     # For now, we'll use the model translation but could enhance this later
             except Exception as e:
                 logger.warning(f"Error checking style memory: {e}, falling back to model translation")
-        
+
         try:
             # Set source and target languages for NLLB tokenizer
-            # Note: NLLB uses 'azj_Latn' for Azerbaijani, not 'aze_Latn'
-            self.tokenizer.src_lang = "eng_Latn"
-            self.tokenizer.tgt_lang = "azj_Latn"  # Correct Azerbaijani language code
+            self.tokenizer.src_lang = src_lang
+            self.tokenizer.tgt_lang = tgt_lang
             
             # Tokenize with source language
             inputs = self.tokenizer(
@@ -125,137 +153,108 @@ class TranslationService:
                 # NLLB uses token IDs in the range 256000+ for language codes
                 
                 forced_bos_token_id = None
-                
-                # Method 1: Try to get from tokenizer's internal language mapping
-                # NLLB tokenizer should have language codes as special tokens
+
                 try:
-                    # Check if tokenizer has a way to get language token IDs
-                    # Some NLLB versions store this differently
                     vocab = self.tokenizer.get_vocab()
-                    
-                    # Azerbaijani language code - NLLB uses 'azj_Latn' (token ID 256020)
-                    # Try the correct code first
-                    if 'azj_Latn' in vocab:
-                        forced_bos_token_id = vocab['azj_Latn']
-                        logger.info(f"Found Azerbaijani token: azj_Latn -> {forced_bos_token_id}")
+
+                    if tgt_lang == "azj_Latn":
+                        candidates = ['azj_Latn', 'aze_Latn', 'azb_Latn', 'az_Latn']
                     else:
-                        # Fallback to other variations
-                        aze_variants = ['azj_Latn', 'aze_Latn', 'azb_Latn', 'az_Latn']
-                        for variant in aze_variants:
-                            if variant in vocab:
-                                forced_bos_token_id = vocab[variant]
-                                logger.info(f"Found Azerbaijani token: {variant} -> {forced_bos_token_id}")
-                                break
-                    
-                    # If not found, try to find by pattern
-                    # NLLB language tokens are typically in the 256000+ range
-                    if forced_bos_token_id is None:
-                        # Look for tokens that might be Azerbaijani
-                        # This is a heuristic - we'll try common Azerbaijani token IDs
-                        # Based on NLLB-200 structure, Azerbaijani should be around 256000-257000
-                        # Let's try a few known patterns
-                        potential_ids = [256000 + i for i in range(200)]  # Check first 200 language slots
-                        for token_id in potential_ids:
+                        candidates = ['eng_Latn']
+
+                    for candidate in candidates:
+                        if candidate in vocab:
+                            forced_bos_token_id = vocab[candidate]
+                            logger.info(f"Found target language token: {candidate} -> {forced_bos_token_id}")
+                            break
+
+                    # Fallback: scan language token range for Azerbaijani
+                    if forced_bos_token_id is None and tgt_lang == "azj_Latn":
+                        for token_id in [256000 + i for i in range(200)]:
                             try:
                                 token = self.tokenizer.convert_ids_to_tokens([token_id])[0]
-                                if 'aze' in token.lower() or token == 'aze_Latn':
+                                if 'aze' in token.lower():
                                     forced_bos_token_id = token_id
                                     logger.info(f"Found Azerbaijani token by pattern: {token_id} -> {token}")
                                     break
                             except:
                                 continue
-                
+
                 except Exception as e:
-                    logger.warning(f"Error finding Azerbaijani token: {e}")
-                
-                # Method 2: If still not found, try using the tokenizer's tgt_lang setting
-                # and let the model generate without forced_bos_token_id
-                # The model should still work, though quality may vary
+                    logger.warning(f"Error finding target language token: {e}")
+
                 if forced_bos_token_id is None or forced_bos_token_id == self.tokenizer.unk_token_id:
-                    logger.warning("Could not find valid Azerbaijani language token, will generate without forced_bos_token_id")
+                    logger.warning("Could not find valid target language token, generating without forced_bos_token_id")
                     forced_bos_token_id = None
-                
+
                 generate_kwargs = {
                     **inputs,
                     "max_length": max_length,
                     "num_beams": 4,
                     "early_stopping": True,
                 }
-                
-                # Only use forced_bos_token_id if it's valid (not UNK)
+
                 if forced_bos_token_id is not None and forced_bos_token_id != self.tokenizer.unk_token_id:
                     generate_kwargs["forced_bos_token_id"] = forced_bos_token_id
-                    logger.debug(f"Using forced_bos_token_id: {forced_bos_token_id} for aze_Latn")
-                else:
-                    # Don't use forced_bos_token_id if it's UNK - the model will still translate
-                    # but might not be perfectly targeted to Azerbaijani
-                    logger.warning("No valid forced_bos_token_id (got UNK), generating without it - translation may not be perfect")
-                
+
                 outputs = self.model.generate(**generate_kwargs)
-            
-            # Decode with target language context
-            self.tokenizer.tgt_lang = "azj_Latn"  # Correct Azerbaijani language code
+
             translation = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
-            
-            # Clean up translation - remove language codes and prefixes
+
+            # Strip language code artifacts
             translation = translation.replace("azj_Latn", "").replace("aze_Latn", "").replace("eng_Latn", "").strip()
-            # Remove "azj" or "aze" prefixes if they appear at the start
             translation = re.sub(r'^(azj|aze)\s*,?\s*', '', translation, flags=re.IGNORECASE).strip()
             if translation.lower().startswith("azj "):
                 translation = translation[4:].strip()
             if translation.lower().startswith("azj,"):
                 translation = translation[4:].strip()
             if translation.lower().startswith("azee"):
-                # Sometimes produces "azee" or "azees" - remove it
                 translation = re.sub(r'^azee?s?\s*,?\s*', '', translation, flags=re.IGNORECASE).strip()
-            
-            # Verify translation is different from input
+
             if translation.strip().lower() == text.strip().lower() or not translation:
-                logger.error(f"Translation failed - output same as input or empty: {text[:50]}... -> {translation[:50]}")
-                # Try one more time with a simpler approach
-                return self._translate_simple(text, max_length)
-            
+                logger.error(f"Translation failed - output same as input or empty: {text[:50]}...")
+                return self._translate_simple(text, max_length, direction=direction)
+
             return translation
-        
+
         except Exception as e:
             logger.error(f"Error during translation: {e}", exc_info=True)
-            # Try simple translation as fallback
             try:
-                return self._translate_simple(text, max_length)
+                return self._translate_simple(text, max_length, direction=direction)
             except:
                 logger.warning(f"Translation failed for: {text[:50]}..., returning original text")
                 return f"[Translation Error] {text}"
     
-    def _translate_simple(self, text: str, max_length: int = 256) -> str:
+    def _translate_simple(self, text: str, max_length: int = 256, direction: str = "en_to_az") -> str:
         """Simple translation fallback method."""
-        self.tokenizer.src_lang = "eng_Latn"
-        self.tokenizer.tgt_lang = "azj_Latn"
+        src_lang = "eng_Latn" if direction == "en_to_az" else "azj_Latn"
+        tgt_lang = "azj_Latn" if direction == "en_to_az" else "eng_Latn"
+        self.tokenizer.src_lang = src_lang
+        self.tokenizer.tgt_lang = tgt_lang
         inputs = self.tokenizer(text, return_tensors="pt", max_length=max_length, truncation=True).to(self.device)
-        
-        # Get correct Azerbaijani token ID
-        azj_token_id = self.tokenizer.convert_tokens_to_ids("azj_Latn")
-        
+
+        tgt_token_id = self.tokenizer.convert_tokens_to_ids(tgt_lang)
+
         with torch.no_grad():
             generate_kwargs = {
                 **inputs,
                 "max_length": max_length,
                 "num_beams": 4,
             }
-            if azj_token_id is not None and azj_token_id != self.tokenizer.unk_token_id:
-                generate_kwargs["forced_bos_token_id"] = azj_token_id
-            
+            if tgt_token_id is not None and tgt_token_id != self.tokenizer.unk_token_id:
+                generate_kwargs["forced_bos_token_id"] = tgt_token_id
+
             outputs = self.model.generate(**generate_kwargs)
-        
-        self.tokenizer.tgt_lang = "azj_Latn"
+
         translation = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
         translation = translation.replace("azj_Latn", "").replace("aze_Latn", "").replace("eng_Latn", "").strip()
         return translation if translation else f"[Translation Error] {text}"
     
-    def translate_batch(self, texts: list, max_length: int = 256) -> list:
+    def translate_batch(self, texts: list, max_length: int = 256, direction: str = "en_to_az") -> list:
         """Translate a batch of texts."""
         translations = []
         for text in texts:
-            translations.append(self.translate(text, max_length))
+            translations.append(self.translate(text, max_length, direction=direction))
         return translations
 
 

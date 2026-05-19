@@ -15,6 +15,8 @@ import {
   AppBar,
   Toolbar,
   IconButton,
+  ToggleButton,
+  ToggleButtonGroup,
 } from '@mui/material';
 import { Upload, Logout, Assessment } from '@mui/icons-material';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +25,7 @@ import axios from 'axios';
 function Dashboard() {
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [translationDirection, setTranslationDirection] = useState('en_to_az');
   const { logout } = useAuth();
   const navigate = useNavigate();
 
@@ -49,11 +52,11 @@ function Dashboard() {
     formData.append('file', file);
 
     try {
-      const response = await axios.post('/api/books/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
+      const response = await axios.post(
+        `/api/books/upload?translation_direction=${translationDirection}`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
       alert(response.data.message || 'Book uploaded successfully! Translation started.');
       fetchBooks();
     } catch (error) {
@@ -83,21 +86,32 @@ function Dashboard() {
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4">Books</Typography>
-          <Button
-            variant="contained"
-            component="label"
-            startIcon={<Upload />}
-          >
-            Upload Book
-            <input
-              type="file"
-              hidden
-              accept=".pdf,.docx,.epub"
-              onChange={handleFileUpload}
-            />
-          </Button>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <ToggleButtonGroup
+              value={translationDirection}
+              exclusive
+              onChange={(_, val) => { if (val) setTranslationDirection(val); }}
+              size="small"
+            >
+              <ToggleButton value="en_to_az">EN → AZ</ToggleButton>
+              <ToggleButton value="az_to_en">AZ → EN</ToggleButton>
+            </ToggleButtonGroup>
+            <Button
+              variant="contained"
+              component="label"
+              startIcon={<Upload />}
+            >
+              Upload Book
+              <input
+                type="file"
+                hidden
+                accept=".pdf,.docx,.epub"
+                onChange={handleFileUpload}
+              />
+            </Button>
+          </Box>
         </Box>
 
         <TableContainer component={Paper}>
@@ -105,9 +119,9 @@ function Dashboard() {
             <TableHead>
               <TableRow>
                 <TableCell>ID</TableCell>
-                <TableCell>Title (EN)</TableCell>
-                <TableCell>Title (AZ)</TableCell>
+                <TableCell>Title</TableCell>
                 <TableCell>Author</TableCell>
+                <TableCell>Direction</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Actions</TableCell>
               </TableRow>
@@ -117,8 +131,8 @@ function Dashboard() {
                 <TableRow key={book.id}>
                   <TableCell>{book.id}</TableCell>
                   <TableCell>{book.title_en}</TableCell>
-                  <TableCell>{book.title_az || '-'}</TableCell>
                   <TableCell>{book.author || '-'}</TableCell>
+                  <TableCell>{book.translation_direction === 'az_to_en' ? 'AZ → EN' : 'EN → AZ'}</TableCell>
                   <TableCell>{book.status}</TableCell>
                   <TableCell>
                     <Button

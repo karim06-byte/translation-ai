@@ -64,7 +64,6 @@ def sentence_tokenize(text: str, language: str = 'en') -> List[str]:
         sentences = sent_tokenize(text, language=language)
     except:
         # Fallback: improved regex-based sentence splitting
-        import re
         # Split on sentence endings (. ! ?) followed by whitespace or newline
         # Handle abbreviations and decimal numbers
         pattern = r'(?<=[.!?])\s+(?=[A-Z])'

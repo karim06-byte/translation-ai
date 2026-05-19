@@ -25,20 +25,27 @@ def translate(
         translation_service = get_translation_service()
         style_memory_service = get_style_memory_service()
         
+        direction = getattr(request, "direction", "en_to_az")
+
         # Get translation from model
-        translated_az = translation_service.translate(request.source_en)
-        
-        # Check style memory for similar translations
+        translated_az = translation_service.translate(
+            request.source_en,
+            use_style_memory=(direction == "en_to_az"),
+            direction=direction,
+        )
+
+        # Check style memory for similar translations (only relevant for en_to_az)
         style_hint = None
-        nearest = style_memory_service.find_nearest(request.source_en, k=1, threshold=0.8)
-        if nearest:
-            entry, similarity = nearest[0]
-            style_hint = {
-                "similar_source": entry["source_en"],
-                "preferred_translation": entry["preferred_az"],
-                "similarity": similarity
-            }
-        
+        if direction == "en_to_az":
+            nearest = style_memory_service.find_nearest(request.source_en, k=1, threshold=0.8)
+            if nearest:
+                entry, similarity = nearest[0]
+                style_hint = {
+                    "similar_source": entry["source_en"],
+                    "preferred_translation": entry["preferred_az"],
+                    "similarity": similarity
+                }
+
         # If segment_id provided, update segment
         if request.segment_id:
             from backend.api.segments import calculate_and_store_segment_metrics
@@ -76,12 +83,17 @@ def retranslate(
             raise HTTPException(status_code=404, detail="Segment not found")
         
         source_text = request.source_text or segment.source_en
-        
+
+        # Determine direction from the book
+        from backend.models.database import Book
+        book = db.query(Book).filter(Book.id == segment.book_id).first()
+        direction = (book.translation_direction or "en_to_az") if book else "en_to_az"
+
         # Get external API service
         external_api = get_external_api_service()
-        
+
         # Retranslate
-        new_translation = external_api.retranslate(source_text, request.engine)
+        new_translation = external_api.retranslate(source_text, request.engine, direction=direction)
         
         return RetranslateResponse(
             new_translation=new_translation,

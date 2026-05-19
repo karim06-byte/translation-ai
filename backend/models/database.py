@@ -39,6 +39,7 @@ class Book(Base):
     file_path = Column(String(1000))
     file_type = Column(String(50))
     status = Column(String(50), default="uploaded")
+    translation_direction = Column(String(20), default="en_to_az")  # 'en_to_az' or 'az_to_en'
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     
